@@ -107,6 +107,15 @@ export interface TorrentStats {
   live: LiveTorrentStats | null;
 }
 
+export interface DirPreview {
+  exists: boolean;
+  base_name: string;
+  full_path: string;
+  matching_dirs: string[];
+  matching_files: string[];
+  suggestion_full_path: string;
+};
+
 export interface ErrorDetails {
   id?: number;
   method?: string;
@@ -191,6 +200,7 @@ export interface RqbitAPI {
     file_id: number,
     filename?: string | null,
   ) => string | null;
+  getDirPreview: (string: string) => Promise<DirPreview>;
   uploadTorrent: (
     data: string | File,
     opts?: AddTorrentOptions,

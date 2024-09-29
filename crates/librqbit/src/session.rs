@@ -9,6 +9,7 @@ use std::{
 };
 
 use crate::{
+    api::ApiGetDirPreviewResponse,
     api::TorrentIdOrHash,
     bitv_factory::{BitVFactory, NonPersistentBitVFactory},
     dht_utils::{read_metainfo_from_peer_receiver, ReadMetainfoResult},
@@ -55,6 +56,7 @@ use librqbit_core::{
 use parking_lot::RwLock;
 use peer_binary_protocol::Handshake;
 use serde::{Deserialize, Serialize};
+use tokio::fs;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Notify,
@@ -85,6 +87,83 @@ fn torrent_from_bytes(bytes: Bytes) -> anyhow::Result<ParsedTorrentFile> {
         info_bytes: parsed.info_bytes.clone_to_owned(Some(&bytes)).0,
         torrent_bytes: bytes,
     })
+}
+
+async fn process_directory(path: &Path) -> anyhow::Result<(Vec<String>, String, bool)> {
+    let is_complete_dir = fs::metadata(path)
+        .await
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+
+    if is_complete_dir {
+        let matching_dirs = list_subdirectories(path, 5).await?;
+        Ok((matching_dirs, String::new(), true))
+    } else {
+        let (parent, prefix) = get_parent_and_prefix(path);
+        let matching_dirs = find_matching_directories(&parent, &prefix).await?;
+        let matching_dirs_refs: Vec<&Path> = matching_dirs.iter().map(|p| p.as_path()).collect();
+        let suggestion = get_suggestion(&matching_dirs_refs, &parent, &prefix);
+        let matching_dirs_strings = matching_dirs
+            .into_iter()
+            .map(|d| d.to_string_lossy().into_owned())
+            .collect();
+        Ok((matching_dirs_strings, suggestion, false))
+    }
+}
+
+async fn list_subdirectories(path: &Path, limit: usize) -> anyhow::Result<Vec<String>> {
+    let mut dirs = Vec::new();
+    let mut read_dir = fs::read_dir(path).await?;
+    while let Some(entry) = read_dir.next_entry().await? {
+        if dirs.len() >= limit {
+            break;
+        }
+        if entry.file_type().await?.is_dir() {
+            dirs.push(entry.path().to_string_lossy().to_string());
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
+async fn find_matching_directories(parent: &Path, prefix: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let mut matching_dirs = Vec::new();
+    let mut read_dir = fs::read_dir(parent).await?;
+    while let Some(entry) = read_dir.next_entry().await? {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(prefix) && entry.file_type().await?.is_dir() {
+            matching_dirs.push(entry.path());
+        }
+    }
+    Ok(matching_dirs)
+}
+
+fn get_parent_and_prefix(path: &Path) -> (PathBuf, String) {
+    let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
+    let prefix = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    (parent, prefix)
+}
+
+fn get_suggestion(matching_dirs: &[&Path], base_path: &Path, prefix: &str) -> String {
+    base_path
+        .join(
+            matching_dirs
+                .iter()
+                .find(|&p| {
+                    p.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .map(|name| name.starts_with(prefix))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .unwrap_or_else(|| Path::new("")),
+        )
+        .to_string_lossy()
+        .to_string()
 }
 
 #[derive(Default)]
@@ -234,6 +313,13 @@ fn merge_two_optional_streams<T>(
 }
 
 /// Options for adding new torrents to the session.
+#[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GetDirPreviewOptions {
+    /// Include dir contents as context
+    pub with_contents: bool,
+}
+/// Options for adding new torrents to the session.
 //
 // Serialize/deserialize is for Tauri.
 #[derive(Default, Serialize, Deserialize)]
@@ -326,6 +412,10 @@ pub fn read_local_file_including_stdin(filename: &str) -> anyhow::Result<Vec<u8>
             .context("error reading")?;
     }
     Ok(buf)
+}
+
+pub enum GetDirPreview<'a> {
+    Path(Cow<'a, str>),
 }
 
 pub enum AddTorrent<'a> {
@@ -874,6 +964,36 @@ impl Session {
         callback: impl Fn(&mut dyn Iterator<Item = (TorrentId, &ManagedTorrentHandle)>) -> R,
     ) -> R {
         callback(&mut self.db.read().torrents.iter().map(|(id, t)| (*id, t)))
+    }
+
+    pub fn get_dir_preview<'a>(
+        self: &'a Arc<Self>,
+        req: GetDirPreview<'a>,
+        _opts: Option<GetDirPreviewOptions>,
+    ) -> BoxFuture<'a, anyhow::Result<ApiGetDirPreviewResponse>> {
+        async move {
+            match req {
+                GetDirPreview::Path(p) => {
+                    let path = PathBuf::from(p.to_string());
+                    let (matching_dirs, suggestion, is_complete_dir) =
+                        process_directory(&path).await?;
+
+                    Ok(ApiGetDirPreviewResponse {
+                        exists: is_complete_dir,
+                        base_name: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                        full_path: path.to_string_lossy().to_string(),
+                        matching_dirs,
+                        matching_files: vec![],
+                        suggestion_full_path: suggestion,
+                    })
+                }
+            }
+        }
+        .boxed()
     }
 
     /// Add a torrent to the session.

@@ -28,7 +28,7 @@ use axum::{Json, Router};
 use crate::api::{Api, ApiTorrentListOpts, EmptyJsonResponse, TorrentIdOrHash};
 use crate::limits::LimitsConfig;
 use crate::peer_connection::PeerConnectionOptions;
-use crate::session::{AddTorrent, AddTorrentOptions, SUPPORTED_SCHEMES};
+use crate::session::{AddTorrent, AddTorrentOptions, GetDirPreview, SUPPORTED_SCHEMES};
 use crate::torrent_state::peer::stats::snapshot::PeerStatsFilter;
 
 type ApiState = Api;
@@ -136,6 +136,14 @@ impl HttpApi {
 
         async fn dht_table(State(state): State<ApiState>) -> Result<impl IntoResponse> {
             state.api_dht_table().map(axum::Json)
+        }
+
+        async fn get_dir_preview(
+            State(state): State<ApiState>,
+            Path(dir_name): Path<String>,
+        ) -> Result<impl IntoResponse> {
+            let req = GetDirPreview::Path(dir_name.into());
+            state.api_get_dir_preview(req, None).await.map(axum::Json)
         }
 
         async fn session_stats(State(state): State<ApiState>) -> impl IntoResponse {
@@ -547,6 +555,7 @@ impl HttpApi {
             .route("/dht/stats", get(dht_stats))
             .route("/dht/table", get(dht_table))
             .route("/stats", get(session_stats))
+            .route("/dir_preview/:dir_name", get(get_dir_preview))
             .route("/torrents", get(torrents_list))
             .route("/torrents/:id", get(torrent_details))
             .route("/torrents/:id/haves", get(torrent_haves))
@@ -710,6 +719,11 @@ impl HttpApi {
         }
         .boxed()
     }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(crate) struct GetDirPreviewParams {
+    pub dir_name: String,
 }
 
 pub(crate) struct OnlyFiles(Vec<usize>);

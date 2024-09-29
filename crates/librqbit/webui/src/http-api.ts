@@ -1,5 +1,6 @@
 import {
   AddTorrentResponse,
+  DirPreview,
   ErrorDetails,
   ListTorrentsResponse,
   RqbitAPI,
@@ -92,7 +93,10 @@ export const API: RqbitAPI & { getVersion: () => Promise<string> } = {
   stats: (): Promise<SessionStats> => {
     return makeRequest("GET", "/stats");
   },
-
+  getDirPreview: (input_path: string): Promise<DirPreview> => {
+    let path = encodeURIComponent(input_path);
+    return makeRequest("GET", `/dir_preview/${path}`);
+  },
   uploadTorrent: (data, opts): Promise<AddTorrentResponse> => {
     let url = "/torrents?&overwrite=true";
     if (opts?.list_only) {

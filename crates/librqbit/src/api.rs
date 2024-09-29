@@ -12,7 +12,8 @@ use tracing::warn;
 use crate::{
     api_error::{ApiError, ApiErrorExt},
     session::{
-        AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, Session, TorrentId,
+        AddTorrent, AddTorrentOptions, AddTorrentResponse, GetDirPreview, GetDirPreviewOptions,
+        ListOnlyResponse, Session, TorrentId,
     },
     session_stats::snapshot::SessionStatsSnapshot,
     torrent_state::{
@@ -364,6 +365,20 @@ impl Api {
             .context("line_rx wasn't set")?)
     }
 
+    pub async fn api_get_dir_preview(
+        &self,
+        req: GetDirPreview<'_>,
+        opts: Option<GetDirPreviewOptions>,
+    ) -> Result<ApiGetDirPreviewResponse> {
+        let response = self
+            .session
+            .get_dir_preview(req, opts)
+            .await
+            .context("error getting dir preview")
+            .with_error_status_code(StatusCode::BAD_REQUEST)?;
+        Ok(response)
+    }
+
     pub async fn api_add_torrent(
         &self,
         add: AddTorrent<'_>,
@@ -516,6 +531,16 @@ pub struct TorrentDetailsResponse {
     pub files: Option<Vec<TorrentDetailsResponseFile>>,
     #[serde(skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub stats: Option<TorrentStats>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ApiGetDirPreviewResponse {
+    pub base_name: String,
+    pub full_path: String,
+    pub exists: bool,
+    pub matching_dirs: Vec<String>,
+    pub matching_files: Vec<String>,
+    pub suggestion_full_path: String,
 }
 
 #[derive(Serialize, Deserialize)]
