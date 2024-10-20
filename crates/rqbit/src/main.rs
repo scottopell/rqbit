@@ -23,7 +23,7 @@ use librqbit::{
     PeerConnectionOptions, Session, SessionOptions, SessionPersistenceConfig, TorrentStatsState,
 };
 use size_format::SizeFormatterBinary as SF;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, error_span, info, trace_span, warn};
 
@@ -94,6 +94,15 @@ struct Opts {
         env = "RQBIT_HTTP_API_LISTEN_ADDR"
     )]
     http_api_listen_addr: SocketAddr,
+
+    /// The listen socket for HTTP API
+    /// TODO make this exclusive with listen_addr
+    #[arg(
+        long = "http-api-listen-socket",
+        env = "RQBIT_HTTP_API_LISTEN_SOCKET"
+
+    )]
+    http_api_listen_socket: Option<String>,
 
     /// Set this flag if you want to use tokio's single threaded runtime.
     /// It MAY perform better, but the main purpose is easier debugging, as time
@@ -601,13 +610,22 @@ async fn async_main(opts: Opts, cancel: CancellationToken) -> anyhow::Result<()>
                 let http_api = HttpApi::new(api, Some(HttpApiOptions { read_only: false }));
                 let http_api_listen_addr = opts.http_api_listen_addr;
 
-                info!("starting HTTP API at http://{http_api_listen_addr}");
-                let tcp_listener = TcpListener::bind(http_api_listen_addr)
-                    .await
-                    .with_context(|| format!("error binding to {http_api_listen_addr}"))?;
-
                 let upnp_router = upnp_server.as_mut().and_then(|s| s.take_router().ok());
-                let http_api_fut = http_api.make_http_api_and_run(tcp_listener, upnp_router);
+                info!("starting HTTP API at http://{http_api_listen_addr}");
+                let http_api_fut = if let Some(http_listen_socket) = opts.http_api_listen_socket {
+                    let p = PathBuf::from(&http_listen_socket);
+                    let unix_listener = UnixListener::bind(http_listen_socket)
+                        .await
+                        .with_context(|| format!("error listening on {http_listen_socket}"))?;
+
+                    http_api.make_http_api_and_run(unix_listener, upnp_router);
+                } else {
+                    let tcp_listener = TcpListener::bind(http_api_listen_addr)
+                        .await
+                        .with_context(|| format!("error binding to {http_api_listen_addr}"))?;
+
+                    http_api.make_http_api_and_run(tcp_listener, upnp_router);
+                };
 
                 if let Some(watch_folder) = start_opts.watch_folder.as_ref() {
                     session.watch_folder(Path::new(watch_folder));

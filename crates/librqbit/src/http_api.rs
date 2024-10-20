@@ -628,6 +628,9 @@ impl HttpApi {
             .into_make_service_with_connect_info::<SocketAddr>();
 
         async move {
+            // TODO: Once https://github.com/tokio-rs/axum/pull/2941 is merged
+            // and published, this function can take a `Listener`
+            // type to easily support both UDS and TCP
             axum::serve(listener, app)
                 .await
                 .context("error running HTTP API")
